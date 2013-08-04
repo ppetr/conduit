@@ -40,6 +40,7 @@ module Data.Conduit
 
       -- * Connect-and-resume
     , ResumableSource
+    , ResumableConduit
     , ($$+)
     , ($$++)
     , ($$+-)
@@ -65,6 +66,7 @@ import Control.Monad.Trans.Resource
 import Data.Conduit.Internal hiding (await, awaitForever, yield, yieldOr, leftover, bracketP, addCleanup, transPipe, mapOutput, mapOutputMaybe, mapInput)
 import qualified Data.Conduit.Internal as CI
 import Control.Monad.Morph (hoist)
+import Data.Monoid (Monoid(..))
 
 -- Define fixity of all our operators
 infixr 0 $$
@@ -250,14 +252,14 @@ mapInput f g (ConduitM p) = ConduitM $ CI.mapInput f g p
 --
 -- Since 0.5.0
 ($$+) :: Monad m => Source m a -> Sink a m b -> m (ResumableSource m a, b)
-src $$+ sink = connectResume (ResumableSource src (return ())) sink
+src $$+ sink = mempty $$ connectResume (ResumableConduit src (return ())) sink
 {-# INLINE ($$+) #-}
 
 -- | Continue processing after usage of @$$+@.
 --
 -- Since 0.5.0
 ($$++) :: Monad m => ResumableSource m a -> Sink a m b -> m (ResumableSource m a, b)
-($$++) = connectResume
+($$++) src sink = mempty $$ connectResume src sink
 {-# INLINE ($$++) #-}
 
 -- | Complete processing of a @ResumableSource@. This will run the finalizer
@@ -267,7 +269,7 @@ src $$+ sink = connectResume (ResumableSource src (return ())) sink
 -- Since 0.5.0
 ($$+-) :: Monad m => ResumableSource m a -> Sink a m b -> m b
 rsrc $$+- sink = do
-    (ResumableSource _ final, res) <- connectResume rsrc sink
+    (ResumableConduit _ final, res) <- mempty $$ connectResume rsrc sink
     final
     return res
 {-# INLINE ($$+-) #-}

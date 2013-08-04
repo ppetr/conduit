@@ -15,7 +15,8 @@ module Data.Conduit.Internal
     , Sink
     , Consumer
     , Conduit
-    , ResumableSource (..)
+    , ResumableSource
+    , ResumableConduit (..)
       -- * Primitives
     , await
     , awaitE
@@ -280,7 +281,9 @@ type Conduit i m o = ConduitM i o m ()
 -- to be run to close it.
 --
 -- Since 0.5.0
-data ResumableSource m o = ResumableSource (Source m o) (m ())
+type ResumableSource = ResumableConduit ()
+
+data ResumableConduit i m o = ResumableConduit (Conduit i m o) (m ())
 
 -- | Wait for a single input value from upstream.
 --
@@ -454,35 +457,35 @@ pipeL =
       where
         recurse = goLeft rp rc final
 
--- | Connect a @Source@ to a @Sink@ until the latter closes. Returns both the
--- most recent state of the @Source@ and the result of the @Sink@.
+-- | Connect a @Conduit@ to a @Sink@ until the latter closes. Returns both the
+-- most recent state of the @Conduit@ and the result of the @Sink@.
 --
--- We use a @ResumableSource@ to keep track of the most recent finalizer
--- provided by the @Source@.
+-- We use a @ResumableConduit@ to keep track of the most recent finalizer
+-- provided by the @Conduit@.
 --
 -- Since 0.5.0
 connectResume :: Monad m
-              => ResumableSource m o
+              => ResumableConduit i m o
               -> Sink o m r
-              -> m (ResumableSource m o, r)
-connectResume (ResumableSource (ConduitM left0) leftFinal0) (ConduitM right0) =
-    goRight leftFinal0 left0 right0
+              -> Sink i m (ResumableConduit i m o, r)
+connectResume (ResumableConduit (ConduitM left0) leftFinal0) (ConduitM right0) =
+    ConduitM $ goRight leftFinal0 left0 right0
   where
     goRight leftFinal left right =
         case right of
             HaveOutput _ _ o -> absurd o
             NeedInput rp rc  -> goLeft rp rc leftFinal left
-            Done r2          -> return (ResumableSource (ConduitM left) leftFinal, r2)
-            PipeM mp         -> mp >>= goRight leftFinal left
+            Done r2          -> Done (ResumableConduit (ConduitM left) leftFinal, r2)
+            PipeM mp         -> PipeM (liftM (goRight leftFinal left) mp)
             Leftover p i     -> goRight leftFinal (HaveOutput left leftFinal i) p
 
     goLeft rp rc leftFinal left =
         case left of
             HaveOutput left' leftFinal' o -> goRight leftFinal' left' (rp o)
-            NeedInput _ lc                -> recurse (lc ())
+            NeedInput left' lc            -> NeedInput (recurse . left') (recurse . lc)
             Done ()                       -> goRight (return ()) (Done ()) (rc ())
-            PipeM mp                      -> mp >>= recurse
-            Leftover p ()                 -> recurse p
+            PipeM mp                      -> PipeM (liftM recurse mp)
+            Leftover left' i              -> Leftover (recurse left') i -- recurse p
       where
         recurse = goLeft rp rc leftFinal
 
@@ -649,7 +652,7 @@ withUpstream down =
       where
         loop = awaitE >>= either (\u -> return (u, r)) (\_ -> loop)
 
--- | Unwraps a @ResumableSource@ into a @Source@ and a finalizer.
+-- | Unwraps a @ResumableConduit@ into a @Conduit@ and a finalizer.
 --
 -- A @ResumableSource@ represents a @Source@ which has already been run, and
 -- therefore has a finalizer registered. As a result, if we want to turn it
@@ -665,8 +668,8 @@ withUpstream down =
 -- invalidated and cannot be used.
 --
 -- Since 0.5.2
-unwrapResumable :: MonadIO m => ResumableSource m o -> m (Source m o, m ())
-unwrapResumable (ResumableSource src final) = do
+unwrapResumable :: MonadIO m => ResumableConduit i m o -> m (Conduit i m o, m ())
+unwrapResumable (ResumableConduit src final) = do
     ref <- liftIO $ I.newIORef True
     let final' = do
             x <- liftIO $ I.readIORef ref
