@@ -2,8 +2,10 @@ module Data.Conduit.Extra.ZipSink where
 
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans
 import Data.Conduit as C
 import Data.Conduit.Util
+import Data.Monoid
 import Data.Traversable (Traversable(..), sequenceA)
 
 -- | A wrapper for defining an 'Applicative' instance for 'Sink's which allows
@@ -28,6 +30,14 @@ instance Monad m => Applicative (ZipSink i m) where
     pure  = ZipSink . return
     (ZipSink f) <*> (ZipSink x) =
          ZipSink $ liftM (uncurry ($)) $ zipSinks f x
+
+instance MonadTrans (ZipSink i) where
+    lift = ZipSink . lift
+
+instance (Monoid r, Monad m) => Monoid (ZipSink i m r) where
+    mempty = pure mempty
+    mappend = liftA2 mappend
+
 
 broadcast :: (Traversable f, Monad m) => f (Sink i m r) -> Sink i m (f r)
 broadcast = getZipSink . sequenceA . fmap ZipSink
